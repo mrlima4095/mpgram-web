@@ -1,7 +1,8 @@
 #!/bin/sh
 # Entrypoint usado no deploy via Coolify.
 # Gera config.php/api_values.php a partir das variáveis de ambiente (se ainda não existirem),
-# garante as permissões da pasta de sessões e sobe o Apache.
+# garante as permissões da pasta de sessões e sobe o Apache com uma manutenção
+# automática para o MadelineProto.
 set -e
 
 cd /var/www/html
@@ -19,7 +20,6 @@ chown -R www-data:www-data s
 # deixam de existir: o MadelineProto acha que o worker está vivo, tenta falar
 # com um socket órfão e a requisição fica travada ~60s. Era isso que fazia o
 # cliente ficar "carregando pra sempre" depois de cada deploy/restart.
-# Limpar esse estado no boot força a criação de um worker novo.
 clean_ipc_state() {
     find s -maxdepth 2 \
         \( -name 'ipc' -o -name 'callback.ipc' \
@@ -27,41 +27,16 @@ clean_ipc_state() {
         -delete 2>/dev/null || true
 }
 
-clean_ipc_state
+# Limpa o estado de IPC de uma sessão específica.
+clean_session_ipc() {
+    rm -f "$1/ipc" "$1/callback.ipc" "$1/ipcState.php" "$1/ipcState.php.lock" 2>/dev/null || true
+}
 
-# Watchdog: se um worker morrer em tempo de execução (crash/restart do Apache),
-# o estado de IPC fica órfão e a sessão trava. A cada minuto, remove o estado
-# de IPC de sessões sem worker vivo.
-(
-    while true; do
-        sleep 60
-        now=$(date +%s)
-        for st in s/*.madeline/ipcState.php; do
-            [ -e "$st" ] || continue
-            dir=$(dirname "$st")
-            mtime=$(date -r "$st" +%s 2>/dev/null || echo "$now")
-            # estado recente: o worker pode estar subindo, não mexer
-            [ $((now - mtime)) -lt 300 ] && continue
-            if ! pgrep -f "MadelineProto worker /var/www/html/$dir" >/dev/null 2>&1; then
-                echo "[mpgram] estado IPC órfão em $dir, limpando"
-                rm -f "$dir/ipc" "$dir/callback.ipc" \
-                      "$dir/ipcState.php" "$dir/ipcState.php.lock"
-            fi
-        done
-    done
-) &
-
-# O README do projeto recomenda reiniciar o serviço PHP pelo menos de hora em
-# hora (os workers do MadelineProto são de longa duração e vazam memória).
-# Aqui também reciclamos os workers do Apache: se uma requisição travou (ex.:
-# conexão morta com o Telegram), o worker continua segurando o lock da sessão
-# e as próximas chamadas ficam "session busy" até alguém reiniciar. O master do
-# Apache (PID 1) recria os workers sob demanda.
-RESTART_INTERVAL="${MP_WORKER_RESTART_INTERVAL:-3600}"
-case "$RESTART_INTERVAL" in
-    ''|*[!0-9]*) RESTART_INTERVAL=3600 ;;
-esac
-
+# Recicla os workers do MadelineProto e os do Apache. Um worker do Apache que
+# travou no meio de uma requisição continua segurando o lock da sessão (e o
+# socket com o Telegram) mesmo depois que o worker do MadelineProto morre — e
+# aí toda chamada seguinte falha com "session is busy". O master do Apache
+# (PID 1) recria os workers sob demanda.
 recycle_workers() {
     pkill -TERM -f 'MadelineProto worker' 2>/dev/null || true
     for p in $(pgrep -f '^apache2' 2>/dev/null); do
@@ -75,11 +50,61 @@ recycle_workers() {
     clean_ipc_state
 }
 
+clean_ipc_state
+
+# Watchdog (a cada 20s). Para cada sessão:
+#  1) se o worker do MadelineProto morreu mas sobrou estado de IPC, limpa;
+#  2) se o arquivo "lock" da sessão está travado (flock) e não existe worker
+#     vivo, é lock órfão de um processo morto: recicla os workers e recria o
+#     arquivo de lock. Sem isso, a sessão fica "busy" para sempre e o cliente
+#     só volta a funcionar com restart do container.
+# A condição só dispara após 2 verificações seguidas, para não atropelar um
+# worker que esteja subindo.
+(
+    while true; do
+        sleep 20
+        for dir in s/*.madeline; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            marker="/tmp/.mpgram-lock-$name"
+            if pgrep -f "MadelineProto worker /var/www/html/$dir" >/dev/null 2>&1; then
+                rm -f "$marker"
+                continue
+            fi
+            if [ -e "$dir/ipcState.php" ]; then
+                echo "[mpgram] estado de IPC órfão em $name, limpando"
+                clean_session_ipc "$dir"
+            fi
+            if [ -e "$dir/lock" ] && ! flock -n "$dir/lock" true 2>/dev/null; then
+                count=$(cat "$marker" 2>/dev/null || echo 0)
+                count=$((count + 1))
+                echo "$count" > "$marker"
+                if [ "$count" -ge 2 ]; then
+                    echo "[mpgram] liberando lock órfão de $name"
+                    rm -f "$marker"
+                    # o dono do lock já morreu; o arquivo pode ser recriado
+                    rm -f "$dir/lock"
+                    clean_session_ipc "$dir"
+                fi
+            else
+                rm -f "$marker"
+            fi
+        done
+    done
+) &
+
+# O README do projeto recomenda reiniciar o serviço PHP pelo menos de hora em
+# hora (os workers do MadelineProto são de longa duração e vazam memória).
+# O intervalo é configurável (em segundos); 0 desativa.
+RESTART_INTERVAL="${MP_WORKER_RESTART_INTERVAL:-3600}"
+case "$RESTART_INTERVAL" in
+    ''|*[!0-9]*) RESTART_INTERVAL=3600 ;;
+esac
 if [ "$RESTART_INTERVAL" -gt 0 ]; then
     (
         while true; do
             sleep "$RESTART_INTERVAL"
-            echo "[mpgram] reinício periódico (libera locks presos)"
+            echo "[mpgram] reinício periódico dos workers"
             recycle_workers
         done
     ) &
