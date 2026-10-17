@@ -58,6 +58,7 @@ RUN composer install --no-dev --no-interaction --no-progress --optimize-autoload
     && chown -R www-data:www-data /var/www/html
 
 COPY docker/coolify/entrypoint.sh /usr/local/bin/coolify-entrypoint.sh
+COPY docker/coolify/apply-env-config.php /usr/local/bin/coolify-apply-env-config.php
 RUN chmod +x /usr/local/bin/coolify-entrypoint.sh
 
 EXPOSE 80
