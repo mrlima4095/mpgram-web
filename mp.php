@@ -964,6 +964,8 @@ class MP {
         $c = $sets->getConnection();
         $c->setTimeout(10);
         $c->setRetry(false);
+        // Mesmo motivo do api.php: esconder o MTProto de DPI da rede.
+        $c->setObfuscated(true);
         return $sets;
     }
     

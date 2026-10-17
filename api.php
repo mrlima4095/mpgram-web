@@ -191,6 +191,13 @@ function setupMadelineProto($user = null): void
         $app->setSystemVersion($_SERVER['HTTP_X_MPGRAM_SYSTEM']);
     }
     $sets->setAppInfo($app);
+    // Transporte ofuscado: o padrão do MadelineProto é MTProto "puro"
+    // (AbridgedStream sem ofuscação), que é facilmente detectado por DPI e
+    // derrubado em silêncio por algumas redes de datacenter — a conexão fica
+    // "aberta" mas o Telegram nunca responde, e as chamadas travam 60s.
+    $conn = $sets->getConnection();
+    $conn->setObfuscated(true);
+    $conn->setPingInterval(30);
     try {
         $MP = new \danog\MadelineProto\API(sessionspath . $user . '.madeline', $sets);
     } catch (Exception $e) {

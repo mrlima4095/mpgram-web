@@ -53,20 +53,34 @@ clean_ipc_state
 
 # O README do projeto recomenda reiniciar o serviço PHP pelo menos de hora em
 # hora (os workers do MadelineProto são de longa duração e vazam memória).
-# Aqui matamos só os "MadelineProto worker"; o Apache recria sob demanda.
+# Aqui também reciclamos os workers do Apache: se uma requisição travou (ex.:
+# conexão morta com o Telegram), o worker continua segurando o lock da sessão
+# e as próximas chamadas ficam "session busy" até alguém reiniciar. O master do
+# Apache (PID 1) recria os workers sob demanda.
 RESTART_INTERVAL="${MP_WORKER_RESTART_INTERVAL:-3600}"
 case "$RESTART_INTERVAL" in
     ''|*[!0-9]*) RESTART_INTERVAL=3600 ;;
 esac
+
+recycle_workers() {
+    pkill -TERM -f 'MadelineProto worker' 2>/dev/null || true
+    for p in $(pgrep -f '^apache2' 2>/dev/null); do
+        [ "$p" = "1" ] || kill -TERM "$p" 2>/dev/null || true
+    done
+    sleep 3
+    pkill -KILL -f 'MadelineProto worker' 2>/dev/null || true
+    for p in $(pgrep -f '^apache2' 2>/dev/null); do
+        [ "$p" = "1" ] || kill -KILL "$p" 2>/dev/null || true
+    done
+    clean_ipc_state
+}
+
 if [ "$RESTART_INTERVAL" -gt 0 ]; then
     (
         while true; do
             sleep "$RESTART_INTERVAL"
-            echo "[mpgram] reinício periódico dos workers do MadelineProto"
-            pkill -TERM -f 'MadelineProto worker' 2>/dev/null || true
-            sleep 3
-            pkill -KILL -f 'MadelineProto worker' 2>/dev/null || true
-            clean_ipc_state
+            echo "[mpgram] reinício periódico (libera locks presos)"
+            recycle_workers
         done
     ) &
 fi
