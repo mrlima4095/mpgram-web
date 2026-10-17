@@ -972,6 +972,9 @@ class MP {
     static function getMadelineAPI($user, $settings = false): \danog\MadelineProto\API
     {
         require_once 'vendor/autoload.php';
+        // Força o modo "full" (in-process) — veja o comentário em api.php
+        // (setupMadelineProto): sem worker IPC não há lock órfão de sessão.
+        $_GET['MadelineSelfRestart'] = 1;
         if ($settings) {
             $MP = new \danog\MadelineProto\API(sessionspath.$user.'.madeline', static::getMadelineSettings());
         } else {

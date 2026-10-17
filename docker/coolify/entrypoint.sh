@@ -52,17 +52,18 @@ recycle_workers() {
 
 clean_ipc_state
 
-# Watchdog (a cada 20s). Para cada sessão:
-#  1) se o worker do MadelineProto morreu mas sobrou estado de IPC, limpa;
-#  2) se o arquivo "lock" da sessão está travado (flock) e não existe worker
-#     vivo, é lock órfão de um processo morto: recicla os workers e recria o
-#     arquivo de lock. Sem isso, a sessão fica "busy" para sempre e o cliente
-#     só volta a funcionar com restart do container.
-# A condição só dispara após 2 verificações seguidas, para não atropelar um
-# worker que esteja subindo.
+# Watchdog (a cada 30s). No modo full (in-process) não existem workers IPC: o
+# lock da sessão é criado e liberado dentro de cada requisição. Ainda assim,
+# como rede de segurança:
+#  1) limpa estado de IPC órfão (sobra de algum worker antigo);
+#  2) se o arquivo "lock" continuar travado (flock) por várias verificações
+#     seguidas, é lock preso de um processo que morreu no meio da requisição:
+#     recria o arquivo. O limite é alto (4 x 30s = 2 min) para nunca atropelar
+#     uma requisição em andamento (as chamadas ao Telegram podem levar ~60s),
+#     mas baixo o bastante para a sessão não ficar "busy" para sempre.
 (
     while true; do
-        sleep 20
+        sleep 30
         for dir in s/*.madeline; do
             [ -d "$dir" ] || continue
             name=$(basename "$dir")
@@ -79,8 +80,8 @@ clean_ipc_state
                 count=$(cat "$marker" 2>/dev/null || echo 0)
                 count=$((count + 1))
                 echo "$count" > "$marker"
-                if [ "$count" -ge 2 ]; then
-                    echo "[mpgram] liberando lock órfão de $name"
+                if [ "$count" -ge 4 ]; then
+                    echo "[mpgram] liberando lock preso de $name ($count verificações)"
                     rm -f "$marker"
                     # o dono do lock já morreu; o arquivo pode ser recriado
                     rm -f "$dir/lock"
@@ -94,7 +95,8 @@ clean_ipc_state
 ) &
 
 # O README do projeto recomenda reiniciar o serviço PHP pelo menos de hora em
-# hora (os workers do MadelineProto são de longa duração e vazam memória).
+# hora. Mesmo no modo full (sem worker do MadelineProto) vale reciclar os
+# workers do Apache, que acumulam conexões e memória a cada requisição.
 # O intervalo é configurável (em segundos); 0 desativa.
 RESTART_INTERVAL="${MP_WORKER_RESTART_INTERVAL:-3600}"
 case "$RESTART_INTERVAL" in

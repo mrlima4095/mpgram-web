@@ -177,6 +177,16 @@ function setupMadelineProto($user = null): void
         $user = $_SERVER['HTTP_X_MPGRAM_USER'] ?? $PARAMS['user'];
     }
     require_once 'vendor/autoload.php';
+    // Modo "full" (in-process). Por padrão o MadelineProto sobe um processo
+    // worker (IPC) por sessão e cada requisição web fala com ele por um socket.
+    // Neste ambiente (Apache + mod_php) esse worker acaba morrendo e deixando o
+    // flock do arquivo "lock" preso: a partir daí toda chamada falha com
+    // "session is busy"/"Failed to load session" até o lock ser removido na mão
+    // (era isso que fazia o cliente travar em "carregando").
+    // Com esta flag o MadelineProto roda dentro da própria requisição: ele
+    // deserializa a sessão, fala com o Telegram e libera o lock no fim de forma
+    // determinística (não existe worker para deixar lock órfão).
+    $_GET['MadelineSelfRestart'] = 1;
     $sets = new \danog\MadelineProto\Settings;
     $app = new \danog\MadelineProto\Settings\AppInfo;
     $app->setApiId(api_id);

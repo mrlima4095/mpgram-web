@@ -100,17 +100,26 @@ seu número de telefone no próprio cliente.
 
 ## Observações importantes
 
+- **Modo full (in-process)**: o MadelineProto, por padrão, sobe um processo "worker" por
+  sessão (IPC) e cada requisição web conversa com ele por socket. Neste ambiente
+  (Apache + mod_php) esse worker morre no meio do caminho e deixa o `flock` do arquivo
+  `lock` da sessão preso: a partir daí **toda** chamada falha com "session is busy" /
+  "Failed to load session" (o cliente fica "carregando pra sempre") até o lock ser
+  removido na mão. Por isso `api.php` e `mp.php` forçam o **modo full**: o MadelineProto
+  roda dentro da própria requisição e libera o lock de forma determinística no fim.
+  Cada requisição leva ~1s (deserialização + conexão) e requisições simultâneas da mesma
+  sessão são serializadas pelo lock.
+
 - **Restart periódico do PHP**: o README do projeto recomenda reiniciar o serviço PHP pelo
-  menos de hora em hora (os workers do MadelineProto são de longa duração e vazam memória).
-  O entrypoint já faz isso sozinho: a cada 1 hora ele mata apenas os processos
-  `MadelineProto worker` (o Apache os recria sob demanda). Para mudar o intervalo, defina
+  menos de hora em hora. O entrypoint já faz isso sozinho: a cada 1 hora ele recicla os
+  workers do Apache (o master os recria sob demanda). Para mudar o intervalo, defina
   `MP_WORKER_RESTART_INTERVAL` (em segundos; `0` desativa).
 
-- **Sessões travadas ("carregando pra sempre")**: o MadelineProto guarda o PID do worker
-  dentro da própria pasta da sessão (`ipcState.php` + sockets `ipc`). Como `s/` é volume
-  persistente, um redeploy/restart deixaria PIDs mortos ali e as requisições ficariam
-  ~60s esperando um worker inexistente. O entrypoint limpa esse estado no boot e um
-  watchdog roda a cada minuto removendo estado órfão. Se uma sessão aparecer com
+- **Sessões travadas ("carregando pra sempre")**: como `s/` é volume persistente, um
+  redeploy/restart pode deixar estado de IPC de workers mortos (`ipcState.php` + sockets
+  `ipc`). O entrypoint limpa esse estado no boot e um watchdog roda a cada 30s: remove
+  estado órfão e, se o `lock` de uma sessão continuar preso por 2 minutos seguidos,
+  recria o arquivo (rede de segurança). Se uma sessão aparecer com
   `AUTH_KEY_UNREGISTERED`, a sessão foi invalidada no lado do Telegram (sessão encerrada
   em "Dispositivos conectados" ou código de login expirado): basta sair e entrar de novo
   no cliente.
