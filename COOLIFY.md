@@ -100,13 +100,20 @@ seu número de telefone no próprio cliente.
 
 ## Observações importantes
 
-- **Restart periódico do PHP**: o README do projeto recomenda reiniciar o PHP pelo menos
-  de hora em hora (vazamentos de memória do MadelineProto). No Coolify crie uma
-  **Scheduled Task** (a cada 1 hora) executando no container:
-  ```sh
-  apache2ctl -k restart
-  ```
-  O `MaxConnectionsPerChild 500` no `apache.conf` já recicla workers e ajuda bastante.
+- **Restart periódico do PHP**: o README do projeto recomenda reiniciar o serviço PHP pelo
+  menos de hora em hora (os workers do MadelineProto são de longa duração e vazam memória).
+  O entrypoint já faz isso sozinho: a cada 1 hora ele mata apenas os processos
+  `MadelineProto worker` (o Apache os recria sob demanda). Para mudar o intervalo, defina
+  `MP_WORKER_RESTART_INTERVAL` (em segundos; `0` desativa).
+
+- **Sessões travadas ("carregando pra sempre")**: o MadelineProto guarda o PID do worker
+  dentro da própria pasta da sessão (`ipcState.php` + sockets `ipc`). Como `s/` é volume
+  persistente, um redeploy/restart deixaria PIDs mortos ali e as requisições ficariam
+  ~60s esperando um worker inexistente. O entrypoint limpa esse estado no boot e um
+  watchdog roda a cada minuto removendo estado órfão. Se uma sessão aparecer com
+  `AUTH_KEY_UNREGISTERED`, a sessão foi invalidada no lado do Telegram (sessão encerrada
+  em "Dispositivos conectados" ou código de login expirado): basta sair e entrar de novo
+  no cliente.
 
 - **Memória**: cada requisição pode usar centenas de MB. Ajuste `memory_limit`
   (hoje 2048M em `docker/coolify/php.ini`) e os recursos do servidor conforme o
