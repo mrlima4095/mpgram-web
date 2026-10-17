@@ -1,0 +1,22 @@
+.git
+.gitignore
+.gitattributes
+.github
+
+# segredos locais (o entrypoint gera a partir das envs)
+config.php
+api_values.php
+
+# estado/sessões e artefatos locais
+s
+vendor
+composer.lock
+*.log
+lastclean
+
+# deploy legado do repositório (não é usado pela imagem Coolify)
+docker/logs
+
+.idea
+.vscode
+COOLIFY.md
