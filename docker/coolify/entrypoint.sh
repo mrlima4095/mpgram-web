@@ -23,7 +23,8 @@ chown -R www-data:www-data s
 clean_ipc_state() {
     find s -maxdepth 2 \
         \( -name 'ipc' -o -name 'callback.ipc' \
-           -o -name 'ipcState.php' -o -name 'ipcState.php.lock' \) \
+           -o -name 'ipcState.php' -o -name 'ipcState.php.lock' \
+           -o -name '.cancelupdates' \) \
         -delete 2>/dev/null || true
 }
 

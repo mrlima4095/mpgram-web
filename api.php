@@ -1538,6 +1538,15 @@ try {
         setupMadelineProto();
         $timeout = (int) getParam('timeout', '10');
         if ($timeout > 120) $timeout = 120;
+        // Em modo full (in-process) esta requisição segura o lock exclusivo da
+        // sessão enquanto o long poll está aberto. Com o timeout de 30s pedido
+        // pelo cliente, as outras chamadas do app esperavam o lock e falhavam
+        // com "Failed to load session". O limite abaixo só restringe o tempo
+        // OCIOSO do stream (mensagem nova continua chegando na hora); o cliente
+        // simplesmente reconecta. 0 desativa o limite.
+        $maxLongpoll = getenv('MP_MAX_LONGPOLL');
+        $maxLongpoll = ($maxLongpoll === false || $maxLongpoll === '') ? 10 : (int) $maxLongpoll;
+        if ($maxLongpoll > 0 && $timeout > $maxLongpoll) $timeout = $maxLongpoll;
         $offset = (int) getParam('offset');
         $peer = (int) getParam('peer', '0');
         $message = (int) getParam('message', '0');
@@ -1594,6 +1603,12 @@ try {
             }
         }
 
+        // Arquivo-sinal: cancelUpdates marca esta sessão para encerrar o long
+        // poll na hora, sem precisar pegar o lock da sessão (veja o case
+        // 'cancelUpdates'). Assim trocar de conversa não espera o timeout.
+        $cancelFile = sessionspath . ($_SERVER['HTTP_X_MPGRAM_USER'] ?? $PARAMS['user']) . '.madeline/.cancelupdates';
+        @unlink($cancelFile);
+
         $time = microtime(true);
         $so = $offset;
         $i = $message;
@@ -1611,8 +1626,9 @@ try {
                 echo ' ';
                 flush();
                 if (connection_aborted()
-                    || ($longpoll && (microtime(true) - $time >= $timeout ||
-                    ($delay && $res && microtime(true) - $time >= $delay))))
+                    || file_exists($cancelFile)
+                    || (microtime(true) - $time >= $timeout)
+                    || ($longpoll && $delay && $res && microtime(true) - $time >= $delay))
                     break;
                 $updates = $MP->getUpdates(['offset' => $offset, 'limit' => $limit, 'timeout' => 1]);
                 foreach ($updates as $update) {
@@ -1730,6 +1746,7 @@ try {
                 }
                 if (($res && !$delay) || !$longpoll) break;
             }
+            @unlink($cancelFile);
             if (!$res) {
                 echo '{"res":[]}';
             } else {
@@ -2395,9 +2412,13 @@ try {
     // v9
     case 'cancelUpdates':
         checkAuth();
-        setupMadelineProto();
-        $res = $MP->cancelGetUpdates();
-        json(['res' => $v < 11 ? $res : ($res ? 1 : 0)]);
+        // Não inicializa o MadelineProto: em modo full o long poll (method
+        // 'updates') segura o lock exclusivo da sessão e esta chamada ficaria
+        // ~30s esperando e falharia com "Failed to load session". Basta marcar
+        // a sessão; a requisição do long poll vê o arquivo e encerra em ~1s.
+        $cuUser = $_SERVER['HTTP_X_MPGRAM_USER'] ?? $PARAMS['user'];
+        @touch(sessionspath . $cuUser . '.madeline/.cancelupdates');
+        json(['res' => 1]);
         break;
     case 'getDialog':
         checkParamEmpty('id');
