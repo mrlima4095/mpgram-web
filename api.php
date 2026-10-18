@@ -1607,7 +1607,7 @@ try {
         // poll na hora, sem precisar pegar o lock da sessão (veja o case
         // 'cancelUpdates'). Assim trocar de conversa não espera o timeout.
         $cancelFile = sessionspath . ($_SERVER['HTTP_X_MPGRAM_USER'] ?? $PARAMS['user']) . '.madeline/.cancelupdates';
-        @unlink($cancelFile);
+        if (file_exists($cancelFile)) unlink($cancelFile);
 
         $time = microtime(true);
         $so = $offset;
@@ -1746,7 +1746,7 @@ try {
                 }
                 if (($res && !$delay) || !$longpoll) break;
             }
-            @unlink($cancelFile);
+            if (file_exists($cancelFile)) unlink($cancelFile);
             if (!$res) {
                 echo '{"res":[]}';
             } else {
@@ -2417,7 +2417,8 @@ try {
         // ~30s esperando e falharia com "Failed to load session". Basta marcar
         // a sessão; a requisição do long poll vê o arquivo e encerra em ~1s.
         $cuUser = $_SERVER['HTTP_X_MPGRAM_USER'] ?? $PARAMS['user'];
-        @touch(sessionspath . $cuUser . '.madeline/.cancelupdates');
+        $cuDir = sessionspath . $cuUser . '.madeline';
+        if (is_dir($cuDir)) touch($cuDir . '/.cancelupdates');
         json(['res' => 1]);
         break;
     case 'getDialog':
